@@ -1,5 +1,6 @@
+const CURRENT_VERSION = 'V2.7.4';
 const APPEARANCE_FIELDS = ['site_title', 'custom_bg', 'custom_head', 'custom_script'];
-const SITE_FIELDS = ['is_public', 'show_price', 'show_expire', 'show_bw', 'show_tf', 'tg_notify', 'tg_bot_token', 'tg_chat_id', 'turnstile_enabled', 'turnstile_site_key', 'turnstile_secret_key', 'jwt_secret', 'username', 'password', 'custom_ct', 'custom_cu', 'custom_cm', 'custom_bd'];
+const SITE_FIELDS = ['is_public', 'show_price', 'show_expire', 'show_bw', 'show_tf', 'show_long_history', 'tg_notify', 'tg_bot_token', 'tg_chat_id', 'turnstile_enabled', 'turnstile_login_enabled', 'turnstile_site_key', 'turnstile_secret_key', 'jwt_secret', 'username', 'password', 'cloudflare_account_id', 'cloudflare_token', 'custom_ct', 'custom_cu', 'custom_cm', 'custom_bd', 'cleanup_skip_count', 'expire_reminder'];
 
 const defaults = {
   site_title: 'Cloudflare Server Monitor',
@@ -11,16 +12,22 @@ const defaults = {
   show_expire: 'true',
   show_bw: 'true',
   show_tf: 'true',
+  show_long_history: 'false',
   tg_notify: 'false',
   tg_bot_token: '',
   tg_chat_id: '',
+  cleanup_skip_count: '0',
   turnstile_enabled: 'false',
+  turnstile_login_enabled: 'false',
   turnstile_site_key: '',
   turnstile_secret_key: '',
+  cloudflare_account_id: '',
+  cloudflare_token: '',
   custom_ct: 'gd-ct-dualstack.ip.zstaticcdn.com',
   custom_cu: 'gd-cu-dualstack.ip.zstaticcdn.com',
   custom_cm: 'gd-cm-dualstack.ip.zstaticcdn.com',
-  custom_bd: 'lf3-ips.zstaticcdn.com'
+  custom_bd: 'lf3-ips.zstaticcdn.com',
+  expire_reminder: 'false'
 };
 
 function tryParseJSON(str) {
@@ -32,7 +39,18 @@ function tryParseJSON(str) {
   }
 }
 
+const SITE_SETTINGS_TTL = 60 * 1000;
+let cachedSiteSettings = null;
+let siteSettingsCacheExpiry = 0;
+
 export async function loadSiteSettings(db) {
+  const now = Date.now();
+  if (cachedSiteSettings && now < siteSettingsCacheExpiry) {
+    debug('读取site settings缓存');
+    return cachedSiteSettings;
+  }
+  debug('从数据库加载site settings');
+
   const result = { ...defaults };
   let hasSite = false;
 
@@ -66,7 +84,14 @@ export async function loadSiteSettings(db) {
     console.error('加载站点设置失败:', e);
   }
 
+  cachedSiteSettings = result;
+  siteSettingsCacheExpiry = now + SITE_SETTINGS_TTL;
   return result;
+}
+
+export function clearSiteSettingsCache() {
+  cachedSiteSettings = null;
+  siteSettingsCacheExpiry = 0;
 }
 
 export async function loadSettings(db) {
@@ -123,4 +148,40 @@ export async function loadSettings(db) {
   }
 
   return result;
+}
+
+export async function saveSiteOptions(db, updates) {
+  const siteRow = await db.prepare(
+    "SELECT value FROM settings WHERE key = 'site_options'"
+  ).first();
+  
+  const existingSiteOptions = siteRow && siteRow.value
+    ? tryParseJSON(siteRow.value) || {}
+    : {};
+  
+  const siteOptions = { ...existingSiteOptions, ...updates };
+  
+  await db.prepare(
+    'INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value'
+  ).bind('site_options', JSON.stringify(siteOptions)).run();
+  
+  clearSiteSettingsCache();
+  return siteOptions;
+}
+
+let isDebugEnabled = false;
+
+export function setDebug(debug) {
+  isDebugEnabled = debug === 1 || debug === '1' || debug === true;
+  if(isDebugEnabled) console.log('DEBUG模式:', isDebugEnabled);
+}
+
+export function debug(...args) {
+  if (isDebugEnabled) {
+    console.debug('[DEBUG]', ...args);
+  }
+}
+
+export function getCurrentVersion() {
+  return CURRENT_VERSION;
 }

@@ -26,18 +26,17 @@
         </div>
       </div>
       <div class="filter-bar" id="ajax-filters">
-        <span 
-          v-for="(count, code) in filterOptions" 
+        <span
+          v-for="(count, code) in filterOptions"
           :key="code"
           class="filter-tag"
-          :class="{ active: currentFilter === code }"
+          :class="{ active: currentFilter === code, 'filter-tag-unknown': code === 'unknown' }"
           :data-filter="code"
           @click="setFilter(code)"
         >
-          <span v-if="code !== 'all'">
-            <img v-if="code !== 'all'" :src="'https://flagcdn.com/16x12/' + (code || 'xx').toLowerCase() + '.png'" :alt="code">
-          </span>
-          {{ code === 'all' ? '[' + trans.all + ']' : code.toUpperCase() }} {{ count }}
+          <span v-if="code === 'unknown'" class="filter-tag-icon">🏳️</span>
+          <img v-else-if="code !== 'all'" :src="'https://flagcdn.com/16x12/' + getFlagRegionCode(code) + '.png'" :alt="code">
+          {{ code === 'all' ? '[' + trans.all + ']' : code === 'unknown' ? 'UNKNOWN' : code.toUpperCase() }} {{ count }}
         </span>
       </div>
     </div>
@@ -45,8 +44,7 @@
     <div class="global-stats">
       <div class="stat-item">
         <div class="stat-label">{{ trans.totalServers }}</div>
-        <div class="stat-main-value">{{ stats.total }}</div>
-        <div class="stat-sub-info">
+        <div class="stat-main-value stat-main-value-sm stat-sub-info">
           <span class="stat-online-color">{{ trans.online }}:{{ stats.online }}</span> |
           <span class="stat-offline-color">{{ trans.offline }}:{{ stats.offline }}</span>
         </div>
@@ -70,7 +68,7 @@
         <div class="loading-text">$ {{ trans.loading }}</div>
       </div>
       <div v-else-if="groupedServers.length === 0" class="empty-state">
-        [!] {{ trans.noServer }}，请在 <a href="/admin" class="admin-link-color">{{ trans.backToAdmin }}</a> 中添加
+        [!] {{ trans.noServer }}，请在 <router-link to="/admin" class="admin-link-color">{{ trans.backToAdmin }}</router-link> 中添加
       </div>
       <div v-else>
         <div v-for="group in groupedServers" :key="group.name" class="group-section">
@@ -83,6 +81,7 @@
               :key="server.id" 
               :server="server"
               :sys-config="sysConfig"
+              :to="getServerLink(server)"
             />
           </div>
         </div>
@@ -104,8 +103,6 @@
               <th>{{ trans.use }}</th>
               <th>{{ trans.dl }}</th>
               <th>{{ trans.ul }}</th>
-              <th>{{ trans.rx }}</th>
-              <th>{{ trans.tx }}</th>
               <th>{{ trans.update }}</th>
             </tr>
           </thead>
@@ -122,20 +119,20 @@
             <tr 
               v-for="server in filteredServers" 
               :key="server.id"
-              @click="goToServer(server.id)"
+              @click="goToServer(server)"
               class="table-cursor-pointer"
-              :data-country="(server.country || 'xx').toLowerCase()"
+              :data-region="(server.region || 'xx').toLowerCase()"
             >
               <td class="table-center-cell">
                 <div class="status-indicator table-status-indicator-inline" :style="{ background: getStatusColor(server) }"></div>
               </td>
               <td><b>{{ server.name }}</b></td>
               <td>
-                <span v-if="server.country && server.country !== 'xx'">
-                  <img :src="'https://flagcdn.com/24x18/' + server.country.toLowerCase() + '.png'" :alt="server.country" class="flag-img">
+                <span v-if="server.region && server.region !== 'xx'">
+                  <img :src="'https://flagcdn.com/24x18/' + getFlagRegionCode(server.region) + '.png'" :alt="server.region" class="flag-img">
                 </span>
                 <span v-else>🏳️</span>
-                {{ (server.country || 'XX').toUpperCase() }}
+                {{ (server.region || 'XX').toUpperCase() }}
               </td>
               <td><span class="os-label">{{ server.os || 'N/A' }} / {{ server.arch || 'N/A' }} </span></td>
               <td>
@@ -149,17 +146,17 @@
               <td>
                 <div class="table-stat">
                   <div class="stat-bar-container" style="width:60px;">
-                    <div class="stat-bar-fill" :style="{ width: (parseFloat(server.ram) || 0) + '%', background: 'var(--accent-purple)' }"></div>
+                    <div class="stat-bar-fill" :style="{ width: (server.ram_total > 0 ? ((server.ram_used / server.ram_total) * 100).toFixed(2) : 0) + '%', background: 'var(--accent-purple)' }"></div>
                   </div>
-                  <span>{{ (parseFloat(server.ram) || 0).toFixed(1) }}%</span>
+                  <span>{{ server.ram_total > 0 ? ((server.ram_used / server.ram_total) * 100).toFixed(2) : '0.00' }}%</span>
                 </div>
               </td>
               <td>
                 <div class="table-stat">
                   <div class="stat-bar-container" style="width:60px;">
-                    <div class="stat-bar-fill" :style="{ width: (parseFloat(server.disk) || 0) + '%', background: 'var(--accent-green)' }"></div>
+                    <div class="stat-bar-fill" :style="{ width: (server.disk_total > 0 ? ((server.disk_used / server.disk_total) * 100).toFixed(2) : 0) + '%', background: 'var(--accent-green)' }"></div>
                   </div>
-                  <span>{{ (parseFloat(server.disk) || 0).toFixed(1) }}%</span>
+                  <span>{{ server.disk_total > 0 ? ((server.disk_used / server.disk_total) * 100).toFixed(2) : '0.00' }}%</span>
                 </div>
               </td>
               <td v-if="sysConfig.show_tf && server.traffic_limit">
@@ -173,9 +170,7 @@
               <td v-else>-</td>
               <td>{{ formatBytes(server.net_in_speed) }}/s</td>
               <td>{{ formatBytes(server.net_out_speed) }}/s</td>
-              <td>{{ formatBytes(server.net_rx) }}</td>
-              <td>{{ formatBytes(server.net_tx) }}</td>
-              <td class="update-time">{{ getUpdateTime(server.last_updated) }}</td>
+              <td class="update-time label-small">{{ getUpdateTime(server.last_updated) }}</td>
             </tr>
           </tbody>
         </table>
@@ -194,16 +189,18 @@
 
 <script setup>
 import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { useRouter } from 'vue-router'
 import TerminalHeader from '../components/TerminalHeader.vue'
 import ServerCard from '../components/ServerCard.vue'
 import Footer from '../components/Footer.vue'
-import { fetchServers, formatBytes, createLiveSocket } from '../utils/api.js'
+import { fetchServers, fetchServersAll, formatBytes, createLiveSocket, getFlagRegionCode, getApiBases } from '../utils/api.js'
 import { t, currentLang } from '../utils/i18n.js'
 import { translations } from '../utils/i18n.js'
 import { TIME } from '../utils/constants'
 
 const servers = ref([])
 const stats = ref({ total: '-', online: 0, offline: 0, globalNetRx: 0, globalNetTx: 0, globalSpeedIn: 0, globalSpeedOut: 0 })
+const unknownStats = ref(0)
 const sysConfig = ref({
   show_price: true,
   show_expire: true,
@@ -211,28 +208,39 @@ const sysConfig = ref({
   show_tf: true,
   site_title: 'Server Monitor'
 })
-const countryStats = ref({})
+const regionStats = ref({})
 const currentView = ref('card')
 const currentFilter = ref('all')
 const mapInitialized = ref(false)
 const liveConnected = ref(false)
 const isLoading = ref(true)
+const now = ref(Date.now())
+const router = useRouter()
 
 const trans = computed(() => translations[currentLang.value] || translations.en)
 
 const filterOptions = computed(() => {
   const normalizedStats = {}
-  for (const code in countryStats.value) {
-    normalizedStats[code.toLowerCase()] = countryStats.value[code]
+  for (const code in regionStats.value) {
+    const lower = code.toLowerCase()
+    if (lower === 'xx') continue
+    normalizedStats[lower] = regionStats.value[code]
   }
-  return { all: stats.value.total, ...normalizedStats }
+  const opts = { all: stats.value.total, ...normalizedStats }
+  if (unknownStats.value > 0) opts.unknown = unknownStats.value
+  return opts
+})
+
+const filteredServers = computed(() => {
+  if (currentFilter.value === 'all') return servers.value
+  if (currentFilter.value === 'unknown') return servers.value.filter(s => !s.region)
+  return servers.value.filter(s => (s.region || 'xx').toLowerCase() === currentFilter.value)
 })
 
 const groupedServers = computed(() => {
   const groups = {}
   const order = []
-  const filteredList = currentFilter.value === 'all' ? servers.value : servers.value.filter(s => (s.country || 'xx').toLowerCase() === currentFilter.value)
-  filteredList.forEach(server => {
+  filteredServers.value.forEach(server => {
     const groupName = server.server_group || 'Default'
     if (!groups[groupName]) {
       groups[groupName] = []
@@ -241,11 +249,6 @@ const groupedServers = computed(() => {
     groups[groupName].push(server)
   })
   return order.map(name => ({ name, servers: groups[name] }))
-})
-
-const filteredServers = computed(() => {
-  if (currentFilter.value === 'all') return servers.value
-  return servers.value.filter(s => (s.country || 'xx').toLowerCase() === currentFilter.value)
 })
 
 const switchView = (viewName) => {
@@ -271,7 +274,30 @@ const getStatusColor = (server) => {
 const getUpdateTime = (lastUpdated) => {
   if (!lastUpdated) return '-'
   const date = new Date(lastUpdated)
-  return date.toLocaleString(undefined, { hour12: false })
+  const diff = now.value - date.getTime()
+
+  const lang = currentLang.value
+  // 时间差为负或小于1秒时，显示0秒前
+  if (diff < 1000) {
+    return lang === 'zh' ? `0${trans.value.secondsAgo}` : `0 ${trans.value.secondsAgo}`
+  }
+
+  const seconds = Math.floor(diff / 1000)
+  const minutes = Math.floor(seconds / 60)
+  const hours = Math.floor(minutes / 60)
+  const days = Math.floor(hours / 24)
+
+  if (seconds < 60) {
+    return lang === 'zh' ? `${seconds}${trans.value.secondsAgo}` : `${seconds} ${trans.value.secondsAgo}`
+  } else if (minutes < 60) {
+    return lang === 'zh' ? `${minutes}${trans.value.minutesAgo}` : `${minutes} ${trans.value.minutesAgo}`
+  } else if (hours < 24) {
+    return lang === 'zh' ? `${hours}${trans.value.hoursAgo}` : `${hours} ${trans.value.hoursAgo}`
+  } else if (days < 30) {
+    return lang === 'zh' ? `${days}${trans.value.daysAgo}` : `${days} ${trans.value.daysAgo}`
+  } else {
+    return date.toLocaleString(undefined, { hour12: false })
+  }
 }
 
 const getTrafficUsagePercent = (server) => {
@@ -315,7 +341,8 @@ const recomputeStats = () => {
   const now = Date.now()
   let online = 0
   let speedIn = 0, speedOut = 0, netRx = 0, netTx = 0
-  const countryCounts = {}
+  const regionCounts = {}
+  let unknownCount = 0
   for (const s of list) {
     const ts = new Date(s.last_updated || 0).getTime()
     const isOnline = ts && (now - ts) < TIME.ONLINE_THRESHOLD_MS
@@ -326,9 +353,11 @@ const recomputeStats = () => {
     }
     netRx += parseFloat(s.net_rx) || 0
     netTx += parseFloat(s.net_tx) || 0
-    if (s.country) {
-      const key = String(s.country).toUpperCase()
-      countryCounts[key] = (countryCounts[key] || 0) + 1
+    if (s.region) {
+      const key = String(s.region).toUpperCase()
+      regionCounts[key] = (regionCounts[key] || 0) + 1
+    } else {
+      unknownCount++
     }
   }
   stats.value = {
@@ -340,25 +369,41 @@ const recomputeStats = () => {
     globalSpeedIn: speedIn,
     globalSpeedOut: speedOut
   }
-  countryStats.value = countryCounts
+  regionStats.value = regionCounts
+  unknownStats.value = unknownCount
 }
 
 const refreshData = async () => {
   try {
-    const data = await fetchServers()
+    const bases = getApiBases()
+    const data = bases.length > 0 ? await fetchServersAll() : await fetchServers()
     if (!data) return
 
-    // 合并已有列表与最新服务端全量数据（优先使用服务端返回的 name/group 等完整字段）
+    const rawServers = Array.isArray(data.servers)
+      ? data.servers
+      : Object.entries(data.latestMetricsMap || {}).map(([id, metrics]) => ({ id, ...metrics }))
+
     const existingById = new Map(servers.value.map(s => [s.id, s]))
-    const nextList = (data.servers || []).map(s => {
+    const nextList = rawServers.map(s => {
       const prev = existingById.get(s.id)
-      // 取服务端返回作为权威数据，并保留本地字段以防服务端缺少
       return { ...prev, ...s }
     })
     servers.value = nextList
 
     if (data.stats) stats.value = data.stats
-    if (data.countryStats) countryStats.value = data.countryStats
+    if (data.regionStats) {
+      const cleaned = {}
+      for (const code in data.regionStats) {
+        if (code.toLowerCase() === 'xx') continue
+        cleaned[code] = data.regionStats[code]
+      }
+      regionStats.value = cleaned
+    }
+    let unknownCount = 0
+    for (const s of servers.value) {
+      if (!s.region) unknownCount++
+    }
+    unknownStats.value = unknownCount
 
     sysConfig.value = {
       show_price: data.sysConfig?.show_price ?? true,
@@ -381,9 +426,10 @@ const refreshData = async () => {
 //   - 订阅 "all"，收到任何服务器的更新都会合并对应 server 的指标
 //   - WS 连上后关闭 60s 兜底轮询；断开后临时开启作为降级（WS 重连成功后再次清除）
 // -------------------------------------------------------------------------
-let liveSocket = null
+let liveSockets = []
 let refreshInterval = null
 let themeObserver = null
+let timeUpdateInterval = null
 
 const applyLiveUpdate = ({ serverId, data }) => {
   if (!data || !serverId) return
@@ -393,18 +439,41 @@ const applyLiveUpdate = ({ serverId, data }) => {
 }
 
 const startLiveSocket = () => {
-  liveSocket = createLiveSocket('all', {
-    onUpdate: applyLiveUpdate,
-    onStatus: ({ connected }) => {
-      liveConnected.value = !!connected
-      if (connected) {
-        // WS 可用，清除定时轮询
-        if (refreshInterval) { clearInterval(refreshInterval); refreshInterval = null }
-      } else if (!refreshInterval) {
-        // WS 断开，降级启用 60s 轮询直到重连成功
-        refreshInterval = setInterval(refreshData, 60000)
+  const bases = getApiBases()
+
+  // 如果没有配置多个 API bases，使用原来的单连接方式
+  if (bases.length === 0) {
+    liveSockets = [createLiveSocket('all', {
+      onUpdate: applyLiveUpdate,
+      onStatus: ({ connected }) => {
+        liveConnected.value = !!connected
+        if (connected) {
+          if (refreshInterval) { clearInterval(refreshInterval); refreshInterval = null }
+        } else if (!refreshInterval) {
+          refreshInterval = setInterval(refreshData, 60000)
+        }
       }
-    }
+    })]
+    return
+  }
+
+  // 为每个 API base 创建独立的 WebSocket 连接
+  liveSockets = bases.map((_, index) => {
+    return createLiveSocket('all', {
+      onUpdate: applyLiveUpdate,
+      onStatus: ({ connected }) => {
+        // 只要有一个连接成功，就认为实时推送可用
+        const anyConnected = liveSockets.some(s => s && s.isConnected)
+        liveConnected.value = anyConnected
+
+        if (anyConnected) {
+          if (refreshInterval) { clearInterval(refreshInterval); refreshInterval = null }
+        } else if (!refreshInterval) {
+          // 所有连接都断开时，启用降级轮询
+          refreshInterval = setInterval(refreshData, 60000)
+        }
+      }
+    }, index)
   })
 }
 
@@ -431,16 +500,19 @@ const loadLeafletCSS = () => {
   }
 }
 
+const isMobile = () => /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) || window.innerWidth < 768
+
 const createMap = () => {
+  const mobileView = isMobile()
   window.myMap = window.L.map('map-container', {
     zoomControl: false,
     attributionControl: false,
-    minZoom: 1
-  }).setView([30, 10], 2)
+    minZoom: mobileView ? 1 : 1
+  }).setView(mobileView ? [35, 105] : [30, 10], mobileView ? 1 : 2)
 
   window.L.control.zoom({ position: 'bottomright' }).addTo(window.myMap)
 
-  fetch('https://cdn.jsdelivr.net/gh/johan/world.geo.json@master/countries.geo.json')
+  fetch('https://cdn.jsdelivr.net/npm/@surbowl/world-geo-json-zh@2.1.5/world.zh.json')
     .then(res => res.json())
     .then(worldGeoJson => {
       window.worldGeoJson = worldGeoJson
@@ -449,7 +521,7 @@ const createMap = () => {
     .catch(e => console.error('[ERROR] Map load failed', e))
 }
 
-const countryCoords = {
+const regionCoords = {
   'US': [37.09, -95.71], 'CN': [35.86, 104.19], 'JP': [36.20, 138.25], 'HK': [22.31, 114.16],
   'SG': [1.35, 103.81], 'KR': [35.90, 127.76], 'DE': [51.16, 10.45], 'GB': [55.37, -3.43],
   'NL': [52.13, 5.29], 'FR': [46.22, 2.21], 'CA': [56.13, -106.34], 'AU': [-25.27, 133.77],
@@ -459,14 +531,6 @@ const countryCoords = {
   'DK': [56.26, 9.50], 'IE': [53.14, -7.69], 'AT': [47.51, 14.55], 'TR': [38.96, 35.24],
   'AE': [23.42, 53.84], 'MY': [4.21, 101.97], 'TH': [15.87, 100.99], 'VN': [14.05, 108.27],
   'PH': [12.87, 121.77], 'ID': [-0.78, 113.92]
-}
-
-const iso2To3 = {
-  "US":"USA","CN":"CHN","JP":"JPN","HK":"HKG","SG":"SGP","KR":"KOR","DE":"DEU","GB":"GBR",
-  "NL":"NLD","FR":"FRA","CA":"CAN","AU":"AUS","IN":"IND","BR":"BRA","RU":"RUS","ZA":"ZAF",
-  "TW":"TWN","IT":"ITA","SE":"SWE","CH":"CHE","ES":"ESP","PL":"POL","FI":"FIN","NO":"NOR",
-  "DK":"DNK","IE":"IRL","AT":"AUT","TR":"TUR","AE":"ARE","MY":"MYS","TH":"THA","VN":"VNM",
-  "PH":"PHL","ID":"IDN"
 }
 
 let markersLayer, geoJsonLayer, currentMapDataStr = ""
@@ -486,7 +550,7 @@ const getThemeColors = () => {
 const drawMarkers = () => {
   if (!window.myMap || !window.worldGeoJson) return
 
-  const newDataStr = JSON.stringify(countryStats.value)
+  const newDataStr = JSON.stringify(regionStats.value)
   if (currentMapDataStr === newDataStr) return
   currentMapDataStr = newDataStr
 
@@ -495,14 +559,18 @@ const drawMarkers = () => {
   else markersLayer = window.L.layerGroup().addTo(window.myMap)
 
   const colors = getThemeColors()
-  const activeIso3 = {}
-  for (const code in countryStats.value) {
-    if (iso2To3[code.toUpperCase()]) activeIso3[iso2To3[code.toUpperCase()]] = true
+  const activeIso2 = {}
+  for (const code in regionStats.value) {
+    const upperCode = code.toUpperCase()
+    activeIso2[upperCode] = true
+    if (upperCode === 'HK' || upperCode === 'TW' || upperCode === 'MO') {
+      activeIso2['CN'] = true
+    }
   }
 
   geoJsonLayer = window.L.geoJSON(window.worldGeoJson, {
     style: function(feature) {
-      const isActive = activeIso3[feature.id]
+      const isActive = activeIso2[feature.properties.iso_a2]
       return {
         fillColor: isActive ? colors.accentGreen : colors.borderColor,
         weight: 1,
@@ -513,21 +581,31 @@ const drawMarkers = () => {
     }
   }).addTo(window.myMap)
 
-  for (const [code, count] of Object.entries(countryStats.value)) {
+  for (const [code, count] of Object.entries(regionStats.value)) {
     const upperCode = code.toUpperCase()
-    if (countryCoords[upperCode]) {
+    if (regionCoords[upperCode]) {
       const icon = window.L.divIcon({
         className: 'custom-map-marker',
         html: `<div style="background:${colors.accentGreen}; color:${colors.colorBlack}; border-radius:50%; width:22px; height:22px; display:flex; align-items:center; justify-content:center; font-size:10px; font-weight:bold; border:2px solid ${colors.bgPrimary}; box-shadow:0 0 10px ${colors.accentGreen}80; font-family:JetBrains Mono,monospace;">${count}</div>`,
         iconSize: [22,22]
       })
-      window.L.marker(countryCoords[upperCode], {icon: icon}).addTo(markersLayer)
+      window.L.marker(regionCoords[upperCode], {icon: icon}).addTo(markersLayer)
     }
   }
 }
 
-const goToServer = (id) => {
-  window.location.href = `/server/${id}`
+const getServerLink = (server) => {
+  const bases = getApiBases()
+  if (bases.length === 0) return `/server/${server.id}`
+  
+  const apiIndex = bases.indexOf(server.source)
+  if (apiIndex === -1 || apiIndex === 0) return `/server/${server.id}`
+  
+  return `/server/${server.id}?apiIndex=${apiIndex}`
+}
+
+const goToServer = (server) => {
+  router.push(getServerLink(server))
 }
 
 onMounted(() => {
@@ -535,6 +613,11 @@ onMounted(() => {
   currentView.value = savedView
   refreshData()
   startLiveSocket()
+
+  // 每秒更新 now 变量，使相对时间实时刷新
+  timeUpdateInterval = setInterval(() => {
+    now.value = Date.now()
+  }, 1000)
 
   if (savedView === 'map') {
     switchView('map')
@@ -553,7 +636,12 @@ onMounted(() => {
 
 onUnmounted(() => {
   if (refreshInterval) clearInterval(refreshInterval)
-  if (liveSocket) liveSocket.close()
+  if (timeUpdateInterval) clearInterval(timeUpdateInterval)
+  if (liveSockets.length > 0) {
+    liveSockets.forEach(socket => {
+      if (socket) socket.close()
+    })
+  }
   if (themeObserver) themeObserver.disconnect()
 })
 </script>

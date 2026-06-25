@@ -1,6 +1,6 @@
 import { checkAuth, simpleAuthResponse } from '../middleware/auth.js';
-import { getLatestMetrics, getLatestMetricsForAllServers, getAllServers } from '../database/schema.js';
-import { getServerDetail } from '../utils/cache.js';
+import { getLatestMetrics, getLatestMetricsForAllServers } from '../database/schema.js';
+import { getAllServers, getServerDetail } from '../utils/cache.js';
 import { mergeMetricsIntoServer } from '../utils/metrics.js';
 import { createSuccessResponse, createBadRequestResponse, createNotFoundResponse } from '../utils/errors.js';
 
@@ -21,6 +21,9 @@ export async function handleServerAPI(request, env, sys) {
   
   const latestMetrics = await getLatestMetrics(env.DB, id);
   mergeMetricsIntoServer(server, latestMetrics);
+  server.sysConfig = {
+    show_long_history: sys.show_long_history === 'true'
+  };
   
   return createSuccessResponse(server);
 }
@@ -39,7 +42,7 @@ export async function handleServersAPI(request, env, sys) {
   const now = Date.now();
   let globalOnline = 0;
   let globalSpeedIn = 0, globalSpeedOut = 0, globalNetTx = 0, globalNetRx = 0;
-  const countryStats = {};
+  const regionStats = {};
   
   for (const server of results) {
     const latestMetrics = latestMetricsMap.get(server.id);
@@ -60,10 +63,9 @@ export async function handleServersAPI(request, env, sys) {
     globalNetRx += parseFloat(server.net_rx || 0);
     globalNetTx += parseFloat(server.net_tx || 0);
     
-    let cCode = (server.country || '').toUpperCase();
-    if (cCode === 'TW') cCode = 'CN';
+    let cCode = (server.region || '').toUpperCase();
     if (cCode !== '') {
-      countryStats[cCode] = (countryStats[cCode] || 0) + 1;
+      regionStats[cCode] = (regionStats[cCode] || 0) + 1;
     }
   }
   
@@ -80,8 +82,7 @@ export async function handleServersAPI(request, env, sys) {
       globalNetTx,
       globalNetRx
     },
-    countryStats,
-    latestMetricsMap: Object.fromEntries(latestMetricsMap),
+    regionStats,
     sysConfig: {
       show_price: sys.show_price === 'true',
       show_expire: sys.show_expire === 'true',

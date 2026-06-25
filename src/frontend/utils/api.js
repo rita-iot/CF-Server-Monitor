@@ -1,10 +1,12 @@
 import { http, isAdminLoggedIn } from './http'
+import { getApiBase, getApiBases, getWsBase } from './config'
+import { ref } from 'vue'
 
-const API_BASE = window.location.origin
-const WS_PROTO = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-const WS_BASE = `${WS_PROTO}//${window.location.host}`
+export { getApiBase, getApiBases, getWsBase }
 
-export const createLiveSocket = (subscribe, handlers = {}) => {
+export const VERSION = ref('')
+
+export const createLiveSocket = (subscribe, handlers = {}, apiIndex = 0) => {
   const { onUpdate, onStatus, onMessage } = handlers
   const scope = (subscribe || 'all').toLowerCase()
   let ws = null
@@ -14,8 +16,24 @@ export const createLiveSocket = (subscribe, handlers = {}) => {
   let reconnectAttempts = 0
   const MAX_DELAY = 30000
   const MAX_RECONNECT_ATTEMPTS = 10
+  let isConnected = false
+
+  const getWsBaseByIndex = (index) => {
+    const bases = getApiBases()
+    if (bases.length > 0 && bases[index]) {
+      try {
+        const u = new URL(bases[index])
+        const wsProto = u.protocol === 'https:' ? 'wss:' : 'ws:'
+        return `${wsProto}//${u.host}`
+      } catch (_) {
+        return `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}`
+      }
+    }
+    return getWsBase()
+  }
 
   const setStatus = (connected, reason) => {
+    isConnected = connected
     if (typeof onStatus === 'function') {
       onStatus({ connected, reason: reason || '' })
     }
@@ -24,7 +42,7 @@ export const createLiveSocket = (subscribe, handlers = {}) => {
   const connect = () => {
     manualClose = false
     try {
-      ws = new WebSocket(`${WS_BASE}/api/ws?subscribe=${encodeURIComponent(scope)}`)
+      ws = new WebSocket(`${getWsBaseByIndex(apiIndex)}/api/ws?subscribe=${encodeURIComponent(scope)}`)
     } catch (e) {
       setStatus(false, 'WebSocket not supported')
       return
@@ -92,8 +110,17 @@ export const createLiveSocket = (subscribe, handlers = {}) => {
       if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null }
       if (ws) { try { ws.close() } catch (_) {} ws = null }
       connect()
+    },
+    get isConnected() {
+      return isConnected
     }
   }
+}
+
+export const getFlagRegionCode = (region) => {
+  const code = (region || '').toUpperCase()
+  if (code === 'TW' || code === 'HK' || code === 'MO') return 'cn'
+  return code.toLowerCase()
 }
 
 export const formatBytes = (bytes) => {
@@ -102,7 +129,8 @@ export const formatBytes = (bytes) => {
   const k = 1024
   const sizes = ['B', 'KB', 'MB', 'GB', 'TB']
   const i = Math.floor(Math.log(bytes) / Math.log(k))
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i]
+  const safeIndex = Math.max(0, Math.min(i, sizes.length - 1))
+  return parseFloat((bytes / Math.pow(k, safeIndex)).toFixed(2)) + ' ' + sizes[safeIndex]
 }
 
 export const fetchServers = async () => {
@@ -111,66 +139,92 @@ export const fetchServers = async () => {
   return result.data
 }
 
-export const fetchServerDetail = async (id) => {
-  const result = await http.get(`/api/server?id=${id}`)
+export const fetchServersAll = async () => {
+  const results = await http.getAll('/api/servers', { includeAuth: false, includeTurnstile: false })
+  const mergedData = {
+    servers: [],
+    stats: { total: 0, online: 0, offline: 0, globalNetRx: 0, globalNetTx: 0, globalSpeedIn: 0, globalSpeedOut: 0 },
+    regionStats: {},
+    sysConfig: {
+      show_price: true,
+      show_expire: true,
+      show_bw: true,
+      show_tf: true,
+      site_title: 'Server Monitor'
+    }
+  }
+
+  for (const { data, error, baseUrl } of results) {
+    if (error || !data) continue
+
+    const rawServers = Array.isArray(data.servers)
+      ? data.servers
+      : Object.entries(data.latestMetricsMap || {}).map(([id, metrics]) => ({ id, ...metrics }))
+
+    for (const server of rawServers) {
+      mergedData.servers.push({ ...server, source: baseUrl })
+    }
+
+    if (data.stats) {
+      mergedData.stats.total += data.stats.total || 0
+      mergedData.stats.online += data.stats.online || 0
+      mergedData.stats.offline += data.stats.offline || 0
+      mergedData.stats.globalNetRx += data.stats.globalNetRx || 0
+      mergedData.stats.globalNetTx += data.stats.globalNetTx || 0
+      mergedData.stats.globalSpeedIn += data.stats.globalSpeedIn || 0
+      mergedData.stats.globalSpeedOut += data.stats.globalSpeedOut || 0
+    }
+
+    if (data.regionStats) {
+      for (const code in data.regionStats) {
+        mergedData.regionStats[code] = (mergedData.regionStats[code] || 0) + data.regionStats[code]
+      }
+    }
+
+    if (data.sysConfig) {
+      mergedData.sysConfig = {
+        show_price: data.sysConfig.show_price ?? mergedData.sysConfig.show_price,
+        show_expire: data.sysConfig.show_expire ?? mergedData.sysConfig.show_expire,
+        show_bw: data.sysConfig.show_bw ?? mergedData.sysConfig.show_bw,
+        show_tf: data.sysConfig.show_tf ?? mergedData.sysConfig.show_tf,
+        site_title: data.sysConfig.site_title || mergedData.sysConfig.site_title
+      }
+    }
+  }
+
+  return mergedData
+}
+
+export const fetchServerDetail = async (id, apiIndex = 0) => {
+  const result = await http.getByIndex(`/api/server?id=${id}`, apiIndex)
   if (result.error) return null
   return result.data
 }
 
-export const fetchAllHistory = async (id, hours) => {
-  const result = await http.get(`/api/history/all?id=${id}&hours=${hours}`)
-  if (result.error) return null
+export const fetchAllHistory = async (id, hours, apiIndex = 0) => {
+  const result = await http.getByIndex(`/api/history/all?id=${id}&hours=${hours}`, apiIndex)
+  if (result.error) {
+    const error = new Error(result.error)
+    error.code = result.code
+    error.status = result.status
+    error.message = result.message || result.error
+    throw error
+  }
   return result.data
 }
 
 export const adminApi = async (data) => {
-  const headers = {
-    'Content-Type': 'application/json'
-  }
-  const token = localStorage.getItem('jwt_token')
-  if (token) {
-    headers['Authorization'] = 'Bearer ' + token
-  }
-  const turnstileToken = localStorage.getItem('turnstile_token')
-  if (turnstileToken) {
-    headers['X-Turnstile-Token'] = turnstileToken
-  }
-
-  const res = await fetch(`${API_BASE}/admin/api`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(data)
-  })
-
-  if (res.status === 401) {
-    localStorage.removeItem('jwt_token')
-    window.location.href = '/admin'
-  }
-
-  return res
+  const result = await http.post('/admin/api', data)
+  return result
 }
 
 export const login = async (username, password, turnstileToken = '') => {
-  const headers = {
-    'Content-Type': 'application/json'
-  }
-  if (turnstileToken) {
-    headers['X-Turnstile-Token'] = turnstileToken
-  }
+  const result = await http.post('/admin/api', { action: 'login', username, password }, { autoRedirect: false })
   
-  const res = await fetch(`${API_BASE}/admin/api`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({ action: 'login', username, password })
-  })
-  
-  if (res.ok) {
-    const data = await res.json()
-    if (data.token) {
-      localStorage.setItem('jwt_token', data.token)
-    }
+  if (!result.error && result.data && result.data.token) {
+    localStorage.setItem('jwt_token', result.data.token)
   }
-  return res
+  return result
 }
 
 export const logout = () => {
@@ -180,11 +234,14 @@ export const logout = () => {
 export const fetchConfig = async () => {
   const result = await http.get('/api/config', { includeAuth: false, includeTurnstile: false })
   if (result.error) return null
+  if (result.data && result.data.version) {
+    VERSION.value = result.data.version
+  }
   return result.data
 }
 
 export const upgradeDatabase = async () => {
-  const result = await http.get('/updateDatabase')
+  const result = await http.post('/updateDatabase', {}, { autoRedirect: false })
   if (result.error) {
     if (result.status === 401) {
       return { success: false, error: 'Unauthorized' }
@@ -195,7 +252,7 @@ export const upgradeDatabase = async () => {
 }
 
 export const rebuildDatabase = async () => {
-  const result = await http.get('/rebuild')
+  const result = await http.post('/rebuild', {}, { autoRedirect: false })
   if (result.error) {
     if (result.status === 401) {
       return { success: false, error: 'Unauthorized' }

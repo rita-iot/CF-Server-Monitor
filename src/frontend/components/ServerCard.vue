@@ -1,10 +1,10 @@
 <template>
-  <a :href="'/server/' + server.id" class="server-card" :data-country="countryCode">
+  <router-link :to="to" class="server-card" :data-region="regionCode">
     <div class="server-card-header">
       <div class="server-identity">
         <div class="status-indicator" :style="{ background: statusColor, boxShadow: '0 0 8px ' + statusColor }"></div>
-        <span v-if="countryCode !== 'xx'">
-          <img :src="'https://flagcdn.com/24x18/' + countryCode + '.png'" :alt="countryCode" style="vertical-align: middle; margin-right: 5px; border-radius: 2px; filter: brightness(0.9);">
+        <span v-if="regionCode !== 'xx'">
+          <img :src="'https://flagcdn.com/24x18/' + regionCode + '.png'" :alt="regionCode" style="vertical-align: middle; margin-right: 5px; border-radius: 2px; filter: brightness(0.9);">
         </span>
         <span v-else>🏳️</span>
         <span class="server-name">{{ server.name }}</span>
@@ -81,12 +81,12 @@
         <span class="ping-value" :style="{ color: getPingColor(server.ping_bd) }">{{ !isPingValid(server.ping_bd) ? trans.timeout : server.ping_bd + 'ms' }}</span>
       </div>
     </div>
-  </a>
+  </router-link>
 </template>
 
 <script setup>
 import { computed } from 'vue'
-import { formatBytes } from '../utils/api'
+import { formatBytes, getFlagRegionCode } from '../utils/api'
 import { t, currentLang } from '../utils/i18n'
 import { translations } from '../utils/i18n'
 import { TIME, PING } from '../utils/constants'
@@ -104,6 +104,10 @@ const props = defineProps({
       show_bw: true,
       show_tf: true
     })
+  },
+  to: {
+    type: String,
+    default: ''
   }
 })
 
@@ -111,7 +115,7 @@ const trans = computed(() => translations[currentLang.value] || translations.en)
 
 const now = Date.now()
 
-const countryCode = computed(() => (props.server.country || 'xx').toLowerCase())
+const regionCode = computed(() => getFlagRegionCode(props.server.region))
 
 const isOnline = computed(() => {
   const lastUpdated = new Date(props.server.last_updated).getTime()
@@ -122,8 +126,18 @@ const statusColor = computed(() => isOnline.value ? 'var(--accent-green)' : 'var
 const statusText = computed(() => isOnline.value ? trans.value.online : trans.value.offline)
 
 const cpuPercent = computed(() => parseFloat(props.server.cpu || 0).toFixed(1))
-const ramPercent = computed(() => parseFloat(props.server.ram || 0).toFixed(1))
-const diskPercent = computed(() => parseFloat(props.server.disk || 0).toFixed(1))
+const ramPercent = computed(() => {
+  if (props.server.ram_total > 0) {
+    return ((props.server.ram_used / props.server.ram_total) * 100).toFixed(2)
+  }
+  return '0.00'
+})
+const diskPercent = computed(() => {
+  if (props.server.disk_total > 0) {
+    return ((props.server.disk_used / props.server.disk_total) * 100).toFixed(2)
+  }
+  return '0.00'
+})
 
 const trafficUsagePercent = computed(() => {
   const limit = parseFloat(props.server.traffic_limit) || 0
